@@ -1,0 +1,91 @@
+body {
+	margin: 0;
+	padding: 0;
+	font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+	background-color: #f0f2f5;
+	color: #333;
+}
+
+.container {
+	max-width: 900px;
+	margin: 40px auto;
+	padding: 40px;
+	background: #ffffff;
+	border-radius: 10px;
+	box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+	text-align: center;
+}
+
+h1 {
+	color: #007bff;
+	margin-bottom: 30px;
+}
+
+.upload-form {
+	margin-bottom: 40px;
+}
+
+.upload-form input[type="file"] {
+	padding: 10px;
+	font-size: 16px;
+}
+
+.upload-form button {
+	padding: 10px 20px;
+	margin-left: 15px;
+	background-color: #007bff;
+	border: none;
+	color: white;
+	font-size: 16px;
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.upload-form button:hover {
+	background-color: #0056b3;
+}
+
+.output {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	gap: 40px;
+	margin-top: 30px;
+	flex-wrap: wrap;
+}
+
+.image-box {
+	text-align: center;
+}
+
+.image-box img {
+	width: 250px;
+	height: auto;
+	border-radius: 10px;
+	box-shadow: 0 0 15px rgba(0, 0, 0, 0.15);
+}
+
+.image-box p {
+	margin-top: 10px;
+	font-weight: 600;
+}
+
+.prediction-box {
+	text-align: center;
+	padding: 20px;
+	border-radius: 12px;
+	background-color: #f8f9fa;
+	box-shadow: 0 0 12px rgba(0, 0, 0, 0.1);
+}
+
+.prediction-box h2 {
+	margin-bottom: 10px;
+	font-size: 22px;
+	color: #343a40;
+}
+
+.prediction {
+	font-size: 20px;
+	color: #dc3545;
+	font-weight: bold;
+}
