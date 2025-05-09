@@ -1,110 +1,207 @@
+from flask import Flask, request, render_template, jsonify, send_from_directory
 import os
-import torch
-import numpy as np
-from flask import Flask, render_template, request, redirect, url_for
-from torchvision.models import resnet18, ResNet18_Weights
-from torchvision import transforms
+from werkzeug.utils import secure_filename
 from PIL import Image
-import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torchvision.transforms as transforms
+from torchvision.models import resnet50
+import numpy as np
 import cv2
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'static/uploads'
-app.config['RESULT_FOLDER'] = 'static/results'
 
-# Ensure folders exist
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(app.config['RESULT_FOLDER'], exist_ok=True)
+# Configuration
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Classes
-class_names = ['benign', 'malignant']
-
-# Load model
-weights = ResNet18_Weights.DEFAULT
-model = resnet18(weights=weights)
-num_ftrs = model.fc.in_features
-model.fc = torch.nn.Sequential(
-    torch.nn.Linear(num_ftrs, 128),
-    torch.nn.ReLU(),
-    torch.nn.Dropout(0.4),
-    torch.nn.Linear(128, len(class_names))
-)
-model.load_state_dict(torch.load("model.pth", map_location='cpu'))
-model.eval()
-
-# Hook for Grad-CAM
-features = None
+# Grad-CAM implementation
 
 
-def forward_hook(module, input, output):
-    global features
-    features = output
+class GradCAM:
+    def __init__(self, model, target_layer):
+        self.model = model
+        self.target_layer = target_layer
+        self.gradients = None
+        self.activations = None
+        self.hook_handles = []
+
+        # Register hooks
+        self._register_hooks(target_layer)
+
+    def _register_hooks(self, layer):
+        def forward_hook(module, input, output):
+            self.activations = output
+
+        def backward_hook(module, grad_input, grad_output):
+            self.gradients = grad_output[0]
+
+        forward_handle = layer.register_forward_hook(forward_hook)
+        backward_handle = layer.register_backward_hook(backward_hook)
+        self.hook_handles.extend([forward_handle, backward_handle])
+
+    def __call__(self, input_tensor, target_class=None):
+        # Forward pass
+        output = self.model(input_tensor)
+
+        if target_class is None:
+            target_class = output.argmax(dim=1)
+
+        # Zero gradients
+        self.model.zero_grad()
+
+        # Backward pass for target class
+        one_hot = torch.zeros_like(output)
+        one_hot[0][target_class] = 1
+        output.backward(gradient=one_hot)
+
+        # Get gradients and activations
+        gradients = self.gradients.detach().cpu().numpy()[0]
+        activations = self.activations.detach().cpu().numpy()[0]
+
+        # Calculate weights
+        weights = np.mean(gradients, axis=(1, 2))
+
+        # Calculate heatmap
+        heatmap = np.zeros(activations.shape[1:], dtype=np.float32)
+        for i, w in enumerate(weights):
+            heatmap += w * activations[i]
+
+        # Normalize heatmap
+        heatmap = np.maximum(heatmap, 0)
+        heatmap /= np.max(heatmap)
+
+        return heatmap
+
+    def __del__(self):
+        for handle in self.hook_handles:
+            handle.remove()
+
+# Skin Cancer Classifier Model
 
 
-model.layer4.register_forward_hook(forward_hook)
+class SkinCancerClassifier(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        self.base_model = resnet50(weights=None)
+        in_features = self.base_model.fc.in_features
+        self.base_model.fc = nn.Linear(in_features, num_classes)
 
-# Preprocessing
+    def forward(self, x):
+        return self.base_model(x)
+
+# Initialize model and load weights
+
+
+def load_model():
+    checkpoint = torch.load(
+        'checkpoints/ham10000_epoch_10.pth', map_location=torch.device('cpu'))
+    model = SkinCancerClassifier(num_classes=len(checkpoint['class_to_idx']))
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+
+    # Get the target layer for Grad-CAM (last convolutional layer)
+    target_layer = model.base_model.layer4[-1].conv3
+    return model, checkpoint['class_to_idx'], target_layer
+
+
+model, class_to_idx, target_layer = load_model()
+idx_to_class = {v: k for k, v in class_to_idx.items()}
+grad_cam = GradCAM(model, target_layer)
+
+# Image transformations
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize([0.5], [0.5])
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
 ])
 
 
-def generate_heatmap(image_path):
-    image = Image.open(image_path).convert('RGB')
-    input_tensor = transform(image).unsqueeze(0)
-
-    # Forward pass
-    output = model(input_tensor)
-    probs = torch.nn.functional.softmax(output, dim=1)
-    pred_class = output.argmax(dim=1).item()
-    pred_prob = probs[0, pred_class].item() * 100  # Confidence percentage
-
-    # Grad-CAM
-    model.zero_grad()
-    class_score = output[0, pred_class]
-    class_score.backward()
-
-    gradients = model.layer4[1].conv2.weight.grad
-    pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
-
-    cam = torch.zeros(features.shape[2:], dtype=torch.float32)
-    for i in range(features.shape[1]):
-        cam += pooled_gradients[i] * features[0, i, :, :]
-
-    cam = np.maximum(cam.detach().numpy(), 0)
-    cam = cv2.resize(cam, (224, 224))
-    cam = cam - np.min(cam)
-    cam = cam / np.max(cam)
-    cam = np.uint8(255 * cam)
-    cam = cv2.applyColorMap(cam, cv2.COLORMAP_JET)
-
-    # Overlay heatmap on original image
-    orig = cv2.cvtColor(np.array(image.resize((224, 224))), cv2.COLOR_RGB2BGR)
-    superimposed_img = cv2.addWeighted(orig, 0.6, cam, 0.4, 0)
-
-    heatmap_path = os.path.join(
-        app.config['RESULT_FOLDER'], os.path.basename(image_path))
-    cv2.imwrite(heatmap_path, superimposed_img)
-
-    return class_names[pred_class], pred_prob, heatmap_path
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-@app.route('/', methods=['GET', 'POST'])
+def generate_heatmap(image, heatmap):
+    # Convert image to numpy array
+    img = np.array(image.resize((224, 224)))
+
+    # Resize heatmap to match image size
+    heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+    heatmap = np.uint8(255 * heatmap)
+
+    # Apply colormap to heatmap
+    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+
+    # Superimpose heatmap on original image
+    superimposed_img = heatmap * 0.4 + img * 0.6
+    superimposed_img = np.clip(superimposed_img, 0, 255).astype(np.uint8)
+
+    # Convert to PIL Image
+    superimposed_img = Image.fromarray(superimposed_img)
+
+    # Convert to base64 for web display
+    buffered = BytesIO()
+    superimposed_img.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+    return img_str
+
+
+@app.route('/', methods=['GET'])
 def index():
-    if request.method == 'POST':
-        file = request.files['image']
-        if not file:
-            return redirect(request.url)
+    return render_template('index.html')
 
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        prediction, pred_prob, heatmap_path = generate_heatmap(filepath)
-        return render_template('index.html', original=filepath, heatmap=heatmap_path, prediction=prediction, confidence=pred_prob)
+        try:
+            # Process image
+            original_image = Image.open(filepath).convert('RGB')
+            input_tensor = transform(original_image).unsqueeze(0)
 
-    return render_template('index.html')
+            # Make prediction
+            with torch.no_grad():
+                outputs = model(input_tensor)
+                _, predicted = torch.max(outputs, 1)
+                prediction = idx_to_class[predicted.item()]
+                confidence = torch.nn.functional.softmax(outputs, dim=1)[
+                    0] * 100
+                confidence = round(confidence[predicted.item()].item(), 2)
+
+            # Generate Grad-CAM heatmap
+            heatmap = grad_cam(input_tensor, predicted)
+            heatmap_img = generate_heatmap(original_image, heatmap)
+
+            # Clean up
+            os.remove(filepath)
+
+            return jsonify({
+                'prediction': prediction,
+                'confidence': confidence,
+                'heatmap': heatmap_img
+            })
+
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    return jsonify({'error': 'Invalid file type'}), 400
 
 
 if __name__ == '__main__':

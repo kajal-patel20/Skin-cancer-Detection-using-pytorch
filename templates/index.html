@@ -2,34 +2,126 @@
 <html lang="en">
 	<head>
 		<meta charset="UTF-8" />
-		<title>Skin Cancer Prediction</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Skin Cancer Classification with Heatmap</title>
 		<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 	</head>
 	<body>
-		<div class="container">
-			<h1>🧬 Skin Cancer Prediction</h1>
+		<h1>Skin Cancer Classification with Heatmap</h1>
+		<p class="info-text">
+			Upload an image of a skin lesion to classify it and see which areas influenced the prediction
+		</p>
 
-			<form method="post" enctype="multipart/form-data" class="upload-form">
-				<input type="file" name="image" accept="image/*" required />
-				<button type="submit">Upload & Predict</button>
-			</form>
+		<div class="upload-container">
+			<input type="file" id="fileInput" accept="image/*" />
+			<br /><br />
+			<button class="btn" onclick="predict()">Classify Image</button>
+		</div>
 
-			{% if prediction %}
-			<div class="output">
-				<div class="image-box">
-					<img src="{{ original }}" alt="Original Image" />
-					<p>Original</p>
-				</div>
-				<div class="image-box">
-					<img src="{{ heatmap }}" alt="Heatmap" />
-					<p>Heatmap</p>
-				</div>
-				<div class="prediction-box">
-					<h2>Prediction</h2>
-					<p class="prediction">{{ prediction }} ({{ confidence|round(2) }}%)</p>
+		<div class="image-container">
+			<div class="image-box">
+				<p>Original Image</p>
+				<div id="preview-container">
+					<img id="preview" alt="Uploaded image will appear here" style="display: none" />
+					<div id="preview-placeholder" class="placeholder-text">No image selected</div>
 				</div>
 			</div>
-			{% endif %}
+			<div class="image-box">
+				<p>Heatmap Visualization</p>
+				<div id="heatmap-container">
+					<img id="heatmap" alt="Heatmap visualization will appear here" style="display: none" />
+					<div id="heatmap-placeholder" class="placeholder-text">Heatmap will appear after analysis</div>
+				</div>
+			</div>
 		</div>
+
+		<div id="result"></div>
+
+		<script>
+			const fileInput = document.getElementById("fileInput");
+			const preview = document.getElementById("preview");
+			const previewPlaceholder = document.getElementById("preview-placeholder");
+			const heatmap = document.getElementById("heatmap");
+			const heatmapPlaceholder = document.getElementById("heatmap-placeholder");
+			const resultDiv = document.getElementById("result");
+
+			fileInput.addEventListener("change", function (e) {
+				const file = e.target.files[0];
+				if (file) {
+					const reader = new FileReader();
+					reader.onload = function (event) {
+						preview.src = event.target.result;
+						preview.style.display = "block";
+						previewPlaceholder.style.display = "none";
+
+						// Reset heatmap display
+						heatmap.style.display = "none";
+						heatmapPlaceholder.style.display = "block";
+						heatmapPlaceholder.textContent = "Heatmap will appear after analysis";
+
+						resultDiv.style.display = "none";
+					};
+					reader.readAsDataURL(file);
+				}
+			});
+
+			function predict() {
+				const file = fileInput.files[0];
+				if (!file) {
+					alert("Please select an image first");
+					return;
+				}
+
+				const formData = new FormData();
+				formData.append("file", file);
+
+				// Show loading state
+				resultDiv.style.display = "block";
+				resultDiv.style.backgroundColor = "#e3f2fd";
+				resultDiv.style.color = "#0d47a1";
+				resultDiv.textContent = "Processing image...";
+
+				// Update heatmap placeholder
+				heatmapPlaceholder.textContent = "Generating heatmap...";
+
+				fetch("/predict", {
+					method: "POST",
+					body: formData,
+				})
+					.then((response) => response.json())
+					.then((data) => {
+						if (data.error) {
+							resultDiv.style.backgroundColor = "#ffebee";
+							resultDiv.style.color = "#d32f2f";
+							resultDiv.textContent = "Error: " + data.error;
+							heatmapPlaceholder.textContent = "Heatmap generation failed";
+						} else {
+							// Show heatmap
+							if (data.heatmap) {
+								heatmap.src = "data:image/png;base64," + data.heatmap;
+								heatmap.style.display = "block";
+								heatmapPlaceholder.style.display = "none";
+							}
+
+							// Show results
+							resultDiv.style.backgroundColor = "#e8f5e9";
+							resultDiv.style.color = "#2e7d32";
+							resultDiv.innerHTML = `
+                        <h3>Classification Result</h3>
+                        <p><strong>Prediction:</strong> ${data.prediction}</p>
+                        <p><strong>Confidence:</strong> ${data.confidence}%</p>
+                        <p>The heatmap shows which areas of the image most influenced the prediction.</p>
+                    `;
+						}
+					})
+					.catch((error) => {
+						console.error("Error:", error);
+						resultDiv.style.backgroundColor = "#ffebee";
+						resultDiv.style.color = "#d32f2f";
+						resultDiv.textContent = "An error occurred during prediction";
+						heatmapPlaceholder.textContent = "Heatmap generation failed";
+					});
+			}
+		</script>
 	</body>
 </html>
