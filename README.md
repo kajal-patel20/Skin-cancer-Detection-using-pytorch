@@ -1,4 +1,4 @@
-# Skin Cancer Classification with Heatmap
+# Skin Cancer Classification 
 
 This project implements a skin cancer classification system using a ResNet-50 model. It includes Grad-CAM visualization to highlight the areas of the image that influenced the model's predictions.
 
